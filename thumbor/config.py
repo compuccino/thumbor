@@ -396,6 +396,12 @@ Config.define(
 )
 
 
+# HTTP Basic Auth
+Config.define('HTTP_BASIC_AUTH_USER', None, 'HTTP Basic Auth Username')
+Config.define('HTTP_BASIC_AUTH_PASSWORD', None, 'HTTP Basic Auth Password')
+Config.define('HTTP_BASIC_AUTH_MODE', 'basic')
+
+
 def generate_config():
     config.generate_config()
 
