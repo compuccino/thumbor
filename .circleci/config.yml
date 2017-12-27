@@ -1,0 +1,200 @@
+###########################
+# Circle CI configuration #
+###########################
+
+version: 2
+
+##############
+# References #
+##############
+references:
+  # container configuration
+  container_config: &container_config
+    docker:
+      - image: compuccino/circleci-ubuntu-xenial-python:0.0.1
+    working_directory: ~/code
+
+  # cache keys
+  repository_cache_key: &repository_cache_key
+    repo-{{ .Branch }}-{{ .Revision }}
+
+  # repository cache
+  restore_repo: &restore_repo
+    restore_cache:
+      keys:
+        - *repository_cache_key
+
+  create_build_json_file: &create_build_json_file
+    run:
+      name: Create build.json file
+      command: |
+        build_name=$(git describe --tags --always --long)
+        now=$(date)
+        pretty_build_json=$(php -r 'echo json_encode(["version" => $argv[1], "commit" => $argv[2], "date" => $argv[3]], JSON_PRETTY_PRINT);' ${build_name} ${CIRCLE_SHA1} "${now}")
+        echo "${pretty_build_json}" > ~/code/build.json
+
+###############
+# Job configs #
+###############
+jobs:
+
+  # code checkout with caching
+  checkout_code:
+    <<: *container_config
+    steps:
+      - *restore_repo
+      - checkout
+      - *create_build_json_file
+      - save_cache:
+          key: *repository_cache_key
+          paths:
+            - .
+
+  # run user wide install
+  test-install:
+    <<: *container_config
+    steps:
+      - *restore_repo
+      - run:
+          name: Install Thumbor user wide
+          command: python setup.py install --user
+
+  # build dev tarball, store as artifact and send to build storage server
+  build_dev_artifact:
+    <<: *container_config
+    steps:
+      - *restore_repo
+      - run:
+          name: Create build folder
+          command: mkdir ~/build
+      - add_ssh_keys:
+          fingerprints:
+            - "e9:96:d1:a8:46:4c:59:7e:bc:28:26:7f:94:b8:bd:a3"
+      - run:
+          name: Build and store dev tar ball
+          command: |
+            echo $BUILD_STORAGE_DEPLOYMENT_KNOWN_HOST >> ~/.ssh/known_hosts
+            build_name=$(git describe --tags --always --long)
+            tar -czf ~/build/${build_name}_dev.tar.gz -C ~/code .
+            ssh deploy@${BUILD_STORAGE_DEPLOYMENT_IP} "ls -l /data/www/deployments/${CIRCLE_PROJECT_REPONAME}" || ssh deploy@${BUILD_STORAGE_DEPLOYMENT_IP} "mkdir -p /data/www/deployments/${CIRCLE_PROJECT_REPONAME}" && scp ~/build/${build_name}_dev.tar.gz deploy@${BUILD_STORAGE_DEPLOYMENT_IP}:/data/www/deployments/${CIRCLE_PROJECT_REPONAME}/
+      - store_artifacts:
+          path: ~/build
+          destination: build
+
+  # build prod tarball, store as artifact and send to build storage server
+  build_prod_artifact:
+    <<: *container_config
+    steps:
+      - *restore_repo
+      - run:
+          name: Create build folder
+          command: mkdir ~/build
+      - add_ssh_keys:
+          fingerprints:
+            - "e9:96:d1:a8:46:4c:59:7e:bc:28:26:7f:94:b8:bd:a3"
+      - run:
+          name: Build and store prod tar ball
+          command: |
+            echo $BUILD_STORAGE_DEPLOYMENT_KNOWN_HOST >> ~/.ssh/known_hosts
+            build_name=$(git describe --tags --always --long)
+            tar -czf ~/build/${build_name}_prod.tar.gz -C ~/code .
+            ssh deploy@${BUILD_STORAGE_DEPLOYMENT_IP} "ls -l /data/www/deployments/${CIRCLE_PROJECT_REPONAME}" || ssh deploy@${BUILD_STORAGE_DEPLOYMENT_IP} "mkdir -p /data/www/deployments/${CIRCLE_PROJECT_REPONAME}" && scp ~/build/${build_name}_prod.tar.gz deploy@${BUILD_STORAGE_DEPLOYMENT_IP}:/data/www/deployments/${CIRCLE_PROJECT_REPONAME}/
+      - store_artifacts:
+          path: ~/build
+          destination: build
+
+  deploy_dev:
+    <<: *container_config
+    steps:
+      - *restore_repo
+      - add_ssh_keys:
+          fingerprints:
+            - "e9:96:d1:a8:46:4c:59:7e:bc:28:26:7f:94:b8:bd:a3"
+      - run:
+          name: Trigger deployment
+          command: |
+            echo $BUILD_STORAGE_DEPLOYMENT_KNOWN_HOST >> ~/.ssh/known_hosts
+            build_name=$(git describe --tags --always --long)
+            ssh deploy@${BUILD_STORAGE_DEPLOYMENT_IP} "set -eo pipefail; tower-cli job launch --job-template ${TEMPLATE_ID_DEV} --extra-vars \"version: ${build_name}_dev\" --limit \"farm_tag_${CIRCLE_BRANCH}\" --job-explanation \"Automatic deployment triggered by Circle CI build ${CIRCLE_BUILD_NUM}\" --no-input --wait --format \"id\""
+
+  deploy_build:
+    <<: *container_config
+    steps:
+      - *restore_repo
+      - add_ssh_keys:
+          fingerprints:
+            - "e9:96:d1:a8:46:4c:59:7e:bc:28:26:7f:94:b8:bd:a3"
+      - run:
+          name: Trigger deployment
+          command: |
+            echo $BUILD_STORAGE_DEPLOYMENT_KNOWN_HOST >> ~/.ssh/known_hosts
+            build_name=$(git describe --tags --always --long)
+            ssh deploy@${BUILD_STORAGE_DEPLOYMENT_IP} "set -eo pipefail; tower-cli job launch --job-template ${TEMPLATE_ID_BUILD} --extra-vars \"version: ${build_name}_dev\" --limit \"farm_tag_build0\" --job-explanation \"Automatic deployment triggered by Circle CI build ${CIRCLE_BUILD_NUM}\" --no-input --wait --format \"id\""
+
+  deploy_qa:
+    <<: *container_config
+    steps:
+      - *restore_repo
+      - add_ssh_keys:
+          fingerprints:
+            - "e9:96:d1:a8:46:4c:59:7e:bc:28:26:7f:94:b8:bd:a3"
+      - run:
+          name: Trigger deployment
+          command: |
+            echo $BUILD_STORAGE_DEPLOYMENT_KNOWN_HOST >> ~/.ssh/known_hosts
+            build_name=$(git describe --tags --always --long)
+            ssh deploy@${BUILD_STORAGE_DEPLOYMENT_IP} "set -eo pipefail; tower-cli job launch --job-template ${TEMPLATE_ID_QA} --extra-vars \"version: ${build_name}_prod\" --limit \"farm_tag_qa0\" --job-explanation \"Automatic deployment triggered by Circle CI build ${CIRCLE_BUILD_NUM}\" --no-input --wait --format \"id\""
+
+#############
+# Workflows #
+#############
+workflows:
+  version: 2
+
+  default:
+    jobs:
+      - checkout_code
+      - test-install:
+          requires:
+            - checkout_code
+      - build_dev_artifact:
+          context: org-global
+          requires:
+            - test-install
+          filters:
+            branches:
+              only:
+                - develop
+                - /dev[0-9]/
+      - build_prod_artifact:
+          context: org-global
+          requires:
+            - test-install
+          filters:
+            branches:
+              only:
+                - master
+      - deploy_dev:
+          context: org-global
+          requires:
+            - build_dev_artifact
+          filters:
+            branches:
+              only:
+                - /dev[0-9]/
+      - deploy_build:
+          context: org-global
+          requires:
+            - build_dev_artifact
+          filters:
+            branches:
+              only:
+                - develop
+      - deploy_qa:
+          context: org-global
+          requires:
+            - build_prod_artifact
+          filters:
+            branches:
+              only:
+                - master
