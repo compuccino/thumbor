@@ -28,10 +28,7 @@ references:
     run:
       name: Create build.json file
       command: |
-        build_name=$(git describe --tags --always --long)
-        now=$(date)
-        pretty_build_json=$(php -r 'echo json_encode(["version" => $argv[1], "commit" => $argv[2], "date" => $argv[3]], JSON_PRETTY_PRINT);' ${build_name} ${CIRCLE_SHA1} "${now}")
-        echo "${pretty_build_json}" > ~/code/build.json
+        echo "{\"version\" : \"$(git describe --tags --always --long)\", \"commit\" : \"${CIRCLE_SHA1}\", \"date\" : \"$(date)\"}" | python -mjson.tool > ~/code/build.json
 
 ###############
 # Job configs #
